@@ -1,0 +1,1069 @@
+---
+title: "Twitter Mask project"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r global-options}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, cache=TRUE, cache.lazy = FALSE)
+```
+
+```{r}
+library("rtweet")
+library("tidytext")
+library("textdata")
+library("wordcloud")
+library("tm")
+library("slam")
+library("scales")
+library("cowplot")
+library("textclean")
+library("qdap")
+library("stringr")
+library("plyr")
+library("dplyr")
+library("ggplot2")
+library("magrittr")
+library("reshape2")
+library("textstem")
+library("knitr")
+library("rmarkdown")
+library("ggthemes")
+library("sentimentr")
+library("syuzhet")
+library("igraph")
+library("ggraph")
+library("widyr")
+library("topicmodels")
+library("stm")
+library("LDAvis")
+
+source('ggplot_theme_Publication-2.R')
+source('mask_project_funs.R')
+```
+
+### Load a concatenated file with all the tweets. Specify prefix for output files.
+```{r}
+my_tweets <- read.csv('latest_data/all_combined.csv', stringsAsFactors = F)
+# Rename the first column to proper name
+colnames(my_tweets)[1] <- "tweet_id"
+prefix = "final_analysis"
+```
+### Convert the *Created* column to date type
+```{r}
+my_tweets$created <- as.Date(my_tweets$created)
+dim(my_tweets)
+```
+### For March 2020, retain only tweets from 11/03 onwards (day COVID-19 pandemic announced by WHO)
+```{r}
+my_tweets <- subset(my_tweets, created> "2020-03-10")
+dim(my_tweets)
+```
+
+### Number and percentage of tweets with URL
+```{r}
+my_tweets_url <- dim(dplyr::filter(my_tweets, grepl("url:",text)))[1]
+percentage_url = round(my_tweets_url / dim(my_tweets)[1]*100, digits=2)
+my_tweets_url
+percentage_url
+```
+
+### Eliminate tweets with suspect commercial URLs
+```{r}
+my_tweets <- my_tweets %>% dplyr::filter(suspect_url == "False")
+dim(my_tweets)
+```
+### Number and percentage of tweets with user mentions
+```{r}
+my_tweets_mentions <- dim(dplyr::filter(my_tweets, grepl("user:",text)))[1]
+percentage_mentions = round(my_tweets_mentions / dim(my_tweets)[1]*100, digits=2)
+my_tweets_mentions
+percentage_mentions
+```
+### Content cleaning. New addition for apostrophe sub.
+```{r}
+my_tweets$text <-  gsub("@\\S*", "", my_tweets$text) 
+my_tweets$text  <-  gsub("&amp;", "and", my_tweets$text) 
+my_tweets$text  <-  gsub("&gt;", "more than", my_tweets$text) 
+my_tweets$text  <-  gsub("&lt;", "less than", my_tweets$text) 
+my_tweets$text  <-  gsub("[\r\n]", "", my_tweets$text)
+my_tweets$text  <-  gsub("’", "'", my_tweets$text)
+my_tweets$text  <-  gsub("ー", "-", my_tweets$text)
+
+```
+### Remove numbers (there is an option to substitute with words). Does not work well with COVID-19 (mix of word and digit)
+```{r}
+my_tweets$text <- tm::removeNumbers(my_tweets$text)
+```
+### Remove user mentions and urls (dependent on removing numbers and brackets above)
+```{r}
+my_tweets$text <- gsub("\\[[uU]ser:[a-z]+\\]", "", my_tweets$text)
+my_tweets$text <- gsub("\\[[uU]rl:[a-z]+\\]", "", my_tweets$text)
+```
+### Replace abbreviations
+```{r}
+my_tweets$text <- qdap::replace_abbreviation(my_tweets$text)
+```
+### Replace symbols with words. Not good, changing # to "number" which pollutes results.
+```{r}
+#my_tweets$text <- qdap::replace_symbol(my_tweets$text)
+```
+### Remove non-ASCII characters
+```{r}
+my_tweets$text <- textclean::replace_non_ascii(my_tweets$text, replacement = "", remove.nonconverted = TRUE)
+my_tweets$hashtags <- textclean::replace_non_ascii(my_tweets$hashtags, replacement = "", remove.nonconverted = TRUE)
+```
+### Correct incorrect substitutions of symbols
+```{r}
+my_tweets$text <- gsub("a cent", "'", my_tweets$text)
+my_tweets$text <- gsub("\\bcent\\b", "'", my_tweets$text)
+my_tweets$text <- gsub("'\\s", "'", my_tweets$text)
+my_tweets$text <- gsub("dY~", "", my_tweets$text)
+my_tweets$text <- gsub("dY", "", my_tweets$text)
+my_tweets$text <- gsub("\\bdy\\b", "", my_tweets$text)
+my_tweets$text <- gsub("14", "", my_tweets$text)
+my_tweets$text <- gsub("af 1/4", "", my_tweets$text)
+```
+### Replace contractions
+```{r}
+my_tweets$text <- qdap::replace_contraction(my_tweets$text)
+```
+### Replace contractions which are without apostrophe (such as didnt)
+```{r}
+my_tweets <- removeMispelledContract(my_tweets)
+```
+### Eliminate tweets with ad keywords (optional)
+```{r}
+eliminate_keywords = "buy|purchase|store|fashion|product|products|hair mask|shop|
+sale|discount|mba|supplies|supplier|custom|earn|stock|ship|price|provide|promise|
+beauty mask|skincare mask|skin care mask|halloween mask|available|handmade|washable|pcs|
+certified|redbubble|copyright|trademark|aboriginal|art print|flickr|soda|\\b34\\b bottles|thinkbigsundaywithmarsha|facemasksforsale|stationery|mugs|etsyhandmade |shopsmall|wholesale|radyo|homedecor|accessories|apparel|etsyshop|tshirts|onsale|\\bmu\\b|
+thetalktrap|pharmaforum|pharmavoice|ruleoflaw|talkyoshit|northernlinect|montevistalinect|
+\\bnola\\b|moscowmitch"
+my_tweets <- my_tweets[-grep(eliminate_keywords, my_tweets$text, ignore.case=TRUE),]
+```
+### Remove duplicate tweets. (This method may have to be modified)
+```{r}
+my_tweets <- my_tweets %>% dplyr::filter(duplicated(text) == FALSE)
+dim(my_tweets)
+```
+### Save cleaned tweets to file. 
+```{r}
+output_file <- paste(prefix, "_clean_tweets.tsv", sep="")
+write.table(my_tweets, output_file, quote=F, sep="\t", row.names=F)
+```
+
+# Basic stats
+### How many tweets do we have?
+#### **Unique tweets**
+```{r}
+length(unique(my_tweets$text))
+```
+#### **Non deduplicated tweets**
+```{r}
+length(my_tweets$text)
+```
+### How many users?
+```{r}
+all_users <- length(unique(my_tweets$author_id_hash))
+all_users
+```
+### How many total retweets?
+```{r}
+all_retweets <- sum(my_tweets$retweet_count)
+all_retweets
+```
+### How many total likes?
+```{r}
+all_likes <- sum(my_tweets$like_count)
+all_likes
+```
+### How many total quotes?
+```{r}
+all_quotes <- sum(my_tweets$quote_count)
+all_quotes
+```
+### Save the basic stats in a dataframe
+```{r}
+basic_stats <- data.frame("topic" = prefix, 
+"total tweets" = dim(my_tweets)[1],
+"total users" = all_users,
+"likes, mean (SD)" = paste(round(all_likes/dim(my_tweets)[1], digit=2), " (", round(sd(my_tweets$like_count),digit=2) ,")", sep=""),
+"retweets, mean (SD)" = paste(round(all_retweets/dim(my_tweets)[1], digit=2), " (", round(sd(my_tweets$retweet_count),digit=2) ,")", sep=""),
+"quotes, mean (SD)" = paste(round(all_quotes/dim(my_tweets)[1], digit=2), " (", round(sd(my_tweets$quote_count),digit=2) ,")", sep=""),
+"follower count, mean (SD)" = paste(round(sum(my_tweets$author_followers_count)/dim(my_tweets)[1], digit=2), " (", round(sd(my_tweets$author_followers_count),digit=2) ,")", sep=""),
+"User mentions, n (%)" = paste(my_tweets_mentions, " (", percentage_mentions, "%)", sep=""), 
+"Link sharing, n (%)" = paste(my_tweets_url, " (", percentage_url, "%)", sep=""))
+output_file <- paste(prefix, "_", "basic_stats.csv", sep="")
+write.table(basic_stats, output_file, quote=F, sep=",", row.names=F)
+```
+### Most popular tweets by likes  
+```{r}
+liked <- my_tweets %>% dplyr::arrange(desc(like_count))
+liked_count <- plotHistogram(my_tweets, "like_count")
+output_file <- paste(prefix, "_", "liked_histogram.pdf", sep="")
+ggsave(output_file, liked_count, dpi=300, height=3.5, width=3.5, units="in")
+liked_count    
+```  
+
+### Most popular tweets by retweet   
+
+```{r}
+retweeted <- my_tweets %>% dplyr::arrange(desc(retweet_count))
+retweet_count <- plotHistogram(my_tweets, "retweet_count")
+output_file <- paste(prefix, "_", "retweeted_histogram.pdf", sep="")
+ggsave(output_file, retweet_count, dpi=300, height=3.5, width=3.5, units="in")
+retweet_count   
+```  
+
+### Most popular tweets by quote   
+
+```{r}
+quoted <- my_tweets %>% dplyr::arrange(desc(quote_count))
+quoted_count <- plotHistogram(my_tweets, "quote_count")
+output_file <- paste(prefix, "_", "quoted_histogram.pdf", sep="")
+ggsave(output_file, quoted_count, dpi=300, height=3.5, width=3.5, units="in")
+quoted_count    
+```  
+
+### Most popular tweets by reply  
+```{r}
+replied <- my_tweets %>% dplyr::arrange(desc(reply_count))
+replied_count <- plotHistogram(my_tweets, "reply_count")
+output_file <- paste(prefix, "_", "replied_histogram.pdf", sep="")
+ggsave(output_file, replied_count, dpi=300, height=3.5, width=3.5, units="in")
+replied_count    
+```  
+
+
+### Plot volume of unique tweets and users over time  
+```{r}
+tweets_by_date <- my_tweets %>% count(created)
+tweets_by_author <- my_tweets %>% group_by(created) %>% summarise(unique_users = n_distinct(author_id_hash))  
+tweets_timeline <- merge(tweets_by_date, tweets_by_author, by="created")
+tweets_timeline2 = melt(tweets_timeline, id=c("created"))
+timeline_chart <- plotTimeLineChart(tweets_timeline2)
+output_file <- paste(prefix, "_", "timeline_chart.pdf", sep="")
+ggsave(output_file, timeline_chart, dpi=300, height=4, width=5, units="in")
+output_file <- paste(prefix, "_", "timeline_chart.csv", sep="")
+write.table(tweets_timeline2, output_file, quote=F, sep=",", row.names=F)
+timeline_chart  
+```   
+
+## Sentiment analysis
+### Basic sentiment analysis per tweet with Jockers lexicon
+```{r}
+(basic_sentiment <- with(
+    my_tweets, 
+    sentiment_by(
+        get_sentences(text), 
+        list(tweet_id, created, text)
+    )
+))
+```
+### Average emotion valence and SD
+```{r}
+basic_sentiment$ave_sentiment[1]
+basic_sentiment$sd[1]
+```
+
+### How many positive and negative tweets did we retain? Average and cumulative positive and negative score
+```{r}
+positive_emotions <- basic_sentiment %>% filter(ave_sentiment > 0)
+negative_emotions <- basic_sentiment %>% filter(ave_sentiment < 0)
+dim(positive_emotions)
+dim(negative_emotions)
+summary(positive_emotions$ave_sentiment)
+summary(negative_emotions$ave_sentiment)
+sum(positive_emotions$ave_sentiment)
+sum(negative_emotions$ave_sentiment)
+```
+### Plot distribution of positive and negative tweets through time
+```{r}
+basic_sentiment$emotion_type = ""
+basic_sentiment[basic_sentiment$ave_sentiment > 0,]$emotion_type <- "positive"
+basic_sentiment[basic_sentiment$ave_sentiment < 0,]$emotion_type <- "negative"
+basic_sentiment_by_date <- basic_sentiment[basic_sentiment$emotion_type != "",] %>% count(created, emotion_type)
+basic_sentiment_by_date$emotion_type <- factor(basic_sentiment_by_date$emotion_type)
+basic_sentiment_by_date = melt(basic_sentiment_by_date, id=c("created", "emotion_type"))
+basic_colours <- c("brown4", "steelblue2")
+names(basic_colours) <- c("positive", "negative")
+basic_area_timechart <- plotEmotionAreaChart(basic_sentiment_by_date, my_tweets, basic_colours)
+basic_area_timechart
+output_file <- paste(prefix, "_", "basic_area_timechart.pdf", sep="")
+ggsave(output_file, basic_area_timechart, dpi=300, height=7, width=10, units="in")
+output_file <- paste(prefix, "_", "basic_area_timechart.csv", sep="")
+write.table(basic_sentiment_by_date, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Basic sentiment analysis per tweet with nrc lexicon
+```{r}
+(nrc_sentiment <- with(
+    my_tweets, 
+    emotion_by(
+        get_sentences(text), 
+        list(tweet_id, created)
+    )
+))
+```
+###  Keep only non-negated forms of emotions.
+```{r}
+nrc_sentiment <- nrc_sentiment[-grep("negated", nrc_sentiment$emotion_type, ignore.case=TRUE),]
+nrc_sentiment$emotion_type <- factor(nrc_sentiment$emotion_type)
+```
+###   Assign the same colour to each emotion across plots. 
+```{r}
+myColors <- c("#1B9E77", "#A6731D", "#7570B3", "#E7298A", "#66A61E", "#E6AB02","#D95F02", "#666666")
+names(myColors) <- c("trust", "joy", "sadness", "anticipation", "disgust", "anger", "surprise", "fear")
+```
+
+### Plot of total NRC emotion scores of our tweets. Keep only non-negated forms of emotions
+```{r}
+emotion_scores <- nrc_sentiment %>% group_by(emotion_type) %>% summarise(ave_emotion = sum(ave_emotion))
+emotion_scores_barchart <- plotEmotionBars(emotion_scores, myColors)
+emotion_scores_barchart
+output_file <- paste(prefix, "_", "emotion_scores_barchart.pdf", sep="")
+ggsave(output_file, emotion_scores_barchart, dpi=300, height=7, width=7, units="in")
+output_file <- paste(prefix, "_", "emotion_scores_barchart.csv", sep="")
+write.table(emotion_scores, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Plot of fraction of all tweets/absolute numbers with at least 1 word with a given sentiment
+```{r}
+nrc_sentiment_non_zero <- nrc_sentiment %>% filter(ave_emotion > 0)
+emotions_by_date <- nrc_sentiment_non_zero %>% count(created, emotion_type)
+emotions_by_date = melt(emotions_by_date, id=c("created", "emotion_type"))
+emotions_area_timechart <- plotEmotionAreaChart(emotions_by_date, my_tweets, myColors)
+emotions_area_timechart
+output_file <- paste(prefix, "_", "emotion_area_timechart.pdf", sep="")
+ggsave(output_file, emotions_area_timechart, dpi=300, height=7, width=10, units="in")
+output_file <- paste(prefix, "_", "emotion_area_timechart.csv", sep="")
+write.table(emotions_by_date, output_file, quote=F, sep=",", row.names=F)
+```
+### Remove stop words  
+```{r}
+my_tweets_processed <- data.frame(my_tweets)
+my_tweets_processed$text <- tm::removeWords(my_tweets$text, stopwords("en"))
+```
+### Remove punctuation and convert to lowercase. Remove empty tweets.
+```{r}
+my_tweets_processed$text  <- gsub("[[:punct:]]", "", my_tweets_processed$text)
+my_tweets_processed$text <- tolower(my_tweets_processed$text)
+my_tweets_processed <- my_tweets_processed[(!is.na(my_tweets_processed$text) | my_tweets_processed$text==""), ]
+```
+### Lemmatize words within tweets.
+```{r}
+my_tweets_processed$text <- lapply(my_tweets_processed$text, textstem::lemmatize_strings)
+my_tweets_processed$text <- unlist(my_tweets_processed$text)
+output_file <- paste(prefix, "_", "clean_tweets_lemmatized.csv", sep="")
+write.table(my_tweets_processed, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Only unique tweets, tokenize, further stop word removal 
+```{r}
+tweets <- my_tweets_processed %>%
+  dplyr::select(text) %>% unique() %>%
+  tidytext::unnest_tokens(word, text) %>%
+  dplyr::anti_join(stop_words)
+```
+## Which words contribute the most to different emotions?
+```{r}
+nrc_word_counts <- tweets %>%
+  inner_join(tidytext::get_sentiments("nrc")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup() %>% group_by(sentiment)
+```
+### Separate out positive/negative and emotions
+```{r}
+'%ni%' <- Negate('%in%')
+nrc_word_counts_basic <- nrc_word_counts[nrc_word_counts$sentiment %in% c("positive", "negative"),]
+nrc_word_counts_emotions <- nrc_word_counts[nrc_word_counts$sentiment %ni% c("positive", "negative"),]
+output_file <- paste(prefix, "_", "nrc_word_counts_basic.csv", sep="")
+write.table(nrc_word_counts_basic, output_file, quote=F, sep=",", row.names=F)
+output_file <- paste(prefix, "_", "nrc_word_counts_emotions.csv", sep="")
+write.table(nrc_word_counts_emotions, output_file, quote=F, sep=",", row.names=F)
+```
+### Plot the most common words (positive and negative)
+```{r}
+basic_common_words <- plotEmotionTopWords(nrc_word_counts_basic, basic_colours, "sentiment", 1, 0, "n", "Most common words within tweets by sentiment")
+output_file <- paste(prefix, "_", "nrc_word_counts_basic.pdf", sep="")
+ggsave(output_file, basic_common_words, dpi=300, height=7, width=5, units="in")
+basic_common_words
+```
+### Plot the most common words (all emotions)
+```{r}
+emotion_common_words <- plotEmotionTopWords(nrc_word_counts_emotions, myColors, "sentiment", 4, 2, "n", "Most common words within tweets by sentiment")
+output_file <- paste(prefix, "_", "nrc_word_counts_emotion.pdf", sep="")
+ggsave(output_file, emotion_common_words, dpi=300, height=7, width=15, units="in")
+emotion_common_words
+```
+### Words with the highest tf-idf for negative and positive emotions
+```{r}
+tf_basic <- nrc_word_counts_basic %>%
+  tidytext::bind_tf_idf(word, sentiment, n) 
+tf_basic$sentiment <- as.factor(tf_basic$sentiment)
+basic_tf_idf <- plotEmotionTopWords(tf_basic, basic_colours, "sentiment", 1, 0, "tf_idf", "tf-idf")
+output_file <- paste(prefix, "_", "nrc_word_basic_tf_idf.pdf", sep="")
+ggsave(output_file, basic_tf_idf, dpi=300, height=7, width=4, units="in")
+basic_tf_idf
+```
+
+### Words with the highest tf-idf for all emotions
+```{r}
+tf_emotions <- nrc_word_counts_emotions %>%
+  tidytext::bind_tf_idf(word, sentiment, n) 
+emotion_tf_idf <- plotEmotionTopWords(tf_emotions, myColors, "sentiment", 4, 2, "tf_idf", "tf-idf")
+output_file <- paste(prefix, "_", "nrc_word_emotion_tf_idf.pdf", sep="")
+ggsave(output_file, emotion_tf_idf, dpi=300, height=7, width=10, units="in")
+emotion_tf_idf
+```
+
+### Bigrams and trigrams with the highest frequency among postive and negative tweets.
+```{r}
+pos_bigrams <- getBigramDF(positive_emotions) 
+output_file <- paste(prefix, "_pos_bigram_count.csv", sep="")
+write.table(pos_bigrams, output_file, quote=F, sep=",", row.names=F)
+neg_bigrams <- getBigramDF(negative_emotions) 
+output_file <- paste(prefix, "_neg_bigram_count.csv", sep="")
+write.table(neg_bigrams, output_file, quote=F, sep=",", row.names=F)
+
+pos_trigrams <- getTrigramDF(positive_emotions) 
+output_file <- paste(prefix, "_pos_trigram_count.csv", sep="")
+write.table(pos_trigrams, output_file, quote=F, sep=",", row.names=F)
+neg_trigrams <- getTrigramDF(negative_emotions) 
+output_file <- paste(prefix, "_neg_trigram_count.csv", sep="")
+write.table(neg_trigrams, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Networks of bigrams and trigrams with the highest frequency among postive and negative tweets
+```{r}
+bigram_graph_pos <- getBigramNetwork(pos_bigrams) 
+bigram_graph_neg <- getBigramNetwork(neg_bigrams) 
+trigram_graph_pos <- getTrigramNetwork(pos_trigrams) 
+trigram_graph_neg <- getTrigramNetwork(neg_trigrams) 
+```
+### Plot the networks of bigrams and trigrams from positive and negative tweets.
+#### Minimum frequency to display (n = 400 for bigrams n = 100 for trigrams)
+```{r}
+bigram_network_pos <- plotNetworkGraph(bigram_graph_pos, "Network of the most common bigrams in positive tweets", "n")
+bigram_network_pos
+output_file <- paste(prefix, "_", "network_bigrams_pos.pdf", sep="")
+ggsave(output_file, bigram_network_pos, dpi=300, height=4, width=10, units="in")
+
+bigram_network_neg <- plotNetworkGraph(bigram_graph_neg, "Network of the most common bigrams in negative tweets", "n")
+bigram_network_neg
+output_file <- paste(prefix, "_", "network_bigrams_neg.pdf", sep="")
+ggsave(output_file, bigram_network_neg, dpi=300, height=4, width=10, units="in")
+
+trigram_network_pos <- plotNetworkGraph(trigram_graph_pos, "Network of the most common trigrams in positive tweets", "n")
+trigram_network_pos
+output_file <- paste(prefix, "_", "network_trigrams_pos.pdf", sep="")
+ggsave(output_file, trigram_network_pos, dpi=300, height=4, width=10, units="in")
+
+trigram_network_neg <- plotNetworkGraph(trigram_graph_neg, "Network of the most common trigrams in negative tweets", "n")
+trigram_network_neg
+output_file <- paste(prefix, "_", "network_trigrams_neg.pdf", sep="")
+ggsave(output_file, trigram_network_neg, dpi=300, height=4, width=10, units="in")
+
+```
+
+### Create a dataframe with word counts and save to file 
+```{r}
+tweets <- countWords(tweets)
+output_file <- paste(prefix, "_wordcount.csv", sep="")
+write.table(tweets, output_file, quote=F, sep=",", row.names=F)
+```
+### Plot a barchart of words in unique tweets
+```{r}
+barchart_top30 <- plotBarchart(tweets)
+barchart_top30
+output_file <- paste(prefix, "_", "barchart_top_30.pdf", sep="")
+ggsave(output_file, barchart_top30, dpi=300, height=8, width=8, units="in")
+```
+### Retrieve the tweets from which selected unigram(s) supplied in the vector originate. Save to file.
+```{r}
+most_common_terms <- c("India")
+original_tweets_unigram <- retrieveOriginalTweets(most_common_terms)
+output_file <- paste(prefix, "_unigram_selection.csv", sep="")
+write.table(original_tweets_unigram, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Plot a wordcloud of hashtags in unique tweets 
+```{r}
+my_unique_tweets <- my_tweets %>% group_by(text) %>% unique()
+my_unique_tweets$hashtags <- strsplit(my_unique_tweets$hashtags,";")
+my_hashtags <- unlist(my_unique_tweets$hashtags, recursive = TRUE)
+plotWordCloud(my_hashtags, prefix, "hashtag_wordcloud")
+wordcloud(my_hashtags, min.freq=50, scale=c(3, .4), random.order=FALSE, rot.per=0.35, 
+            colors=brewer.pal(8, "Dark2"))   
+```  
+
+### Save table with hashtag frequencies  
+```{r}
+counts_hashtags <- plyr::count(as_tibble(my_hashtags), 'value')
+counts_hashtags <- counts_hashtags[order(counts_hashtags$freq, decreasing = TRUE),]
+output_file <- paste(prefix, "_hashtag_wordcloud.csv", sep="")
+write.table(counts_hashtags, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Create a dataframe with most common bigrams, stop word removal and save to file
+```{r}
+tweets_bigrams <- getBigramDF(my_tweets_processed) 
+output_file <- paste(prefix, "_bigram_count.csv", sep="")
+write.table(tweets_bigrams, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Plot the barchart of top 30 bigrams
+```{r}
+barchart_top30_bigrams <- plotBarchart(tweets_bigrams)
+barchart_top30_bigrams
+output_file <- paste(prefix, "_", "barchart_top_30_bigrams.pdf", sep="")
+ggsave(output_file, barchart_top30_bigrams, dpi=300, height=8, width=8, units="in")
+```
+
+### Retrieve the tweets from which selected bigram(s) supplied in the vector originate. Save to file.
+```{r}
+most_common_terms <- tweets_bigrams$word[0:30]
+original_tweets_bigram <- retrieveOriginalTweets(most_common_terms)
+output_file <- paste(prefix, "_bigram_selection.csv", sep="")
+write.table(original_tweets_bigram, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Create a dataframe with most common trigrams, stop word removal and save to file
+```{r}
+tweets_trigrams <- getTrigramDF(my_tweets_processed) 
+output_file <- paste(prefix, "_trigram_count.csv", sep="")
+write.table(tweets_trigrams, output_file, quote=F, sep=",", row.names=F)
+```
+
+### Plot the barchart of top 30 trigrams
+```{r}
+barchart_top30_trigrams <- plotBarchart(tweets_trigrams)
+barchart_top30_trigrams
+output_file <- paste(prefix, "_", "barchart_top_30_trigrams.pdf", sep="")
+ggsave(output_file, barchart_top30_trigrams, dpi=300, height=8, width=8, units="in")
+```
+### Retrieve the tweets from which selected trigram(s) supplied in the vector originate. Save to file.
+```{r}
+most_common_terms <- tweets_trigrams$word[0:30]
+original_tweets_trigram <- retrieveOriginalTweets(most_common_terms)
+output_file <- paste(prefix, "_trigram_selection.csv", sep="")
+write.table(original_tweets_trigram, output_file, quote=F, sep=",", row.names=F)
+```
+
+## Network visualisation of most common bigrams
+### Filter for only relatively common combinations (n=400)
+
+```{r}
+bigram_graph <- getBigramNetwork(tweets_bigrams) 
+```
+### Plot the bigram graph in basic form
+```{r}
+bigram_network <- plotNetworkGraph(bigram_graph, "Network of the most common bigrams in tweets", "n")
+bigram_network
+output_file <- paste(prefix, "_", "network_bigrams.pdf", sep="")
+ggsave(output_file, bigram_network, dpi=300, height=4, width=10, units="in")
+```
+## Network visualisation of most common trigrams
+### Filter for only relatively common combinations
+
+```{r}
+trigram_graph <- getTrigramNetwork(tweets_trigrams)
+```
+### Plot the trigram graph in basic form
+```{r}
+trigram_network <- plotNetworkGraph(trigram_graph, "Network of the most common trigrams in tweets", "n")
+trigram_network
+output_file <- paste(prefix, "_", "network_trigrams.pdf", sep="")
+ggsave(output_file, trigram_network, dpi=300, height=4, width=10, units="in")
+```
+### Extract tweet id, text, tokenise, stop word removal and word count
+```{r}
+tweets_id <- my_tweets_processed %>%
+  dplyr::select("tweet_id", "text") %>%
+  tidytext::unnest_tokens(word, text) %>%
+  dplyr::filter(!word %in% stop_words$word) 
+```
+### Calculate and filter correlated word pairs (r > 0.8) and save to file
+```{r}
+my_tweets_corr <- tweets_id %>%
+  dplyr::group_by(word) %>%
+  dplyr::filter(n() >= 1000) %>%
+  widyr::pairwise_cor(word, tweet_id, sort = TRUE) %>%
+  dplyr::filter(correlation > .8)
+output_file <- paste(prefix, "_correlated_words.csv", sep="")
+write.table(my_tweets_corr, output_file, quote=F, sep=",", row.names=F)
+```
+### Visualise network of correlated frequent words
+```{r}
+correlation_graph <- my_tweets_corr %>%
+  igraph::graph_from_data_frame()
+correlated_network <- plotNetworkGraph(correlation_graph, "Network of the most correlated words in tweets", "correlation")
+correlated_network
+output_file <- paste(prefix, "_", "correlated_network.pdf", sep="")
+ggsave(output_file, correlated_network, dpi=300, height=4, width=10, units="in")
+```
+## Topic modelling.
+## Generate 4 topics of interest based on keyword search.
+```{r}
+my_tweets
+topic1_keywords = "acid|airflow|air flow|asthma|carbon|dioxide|co2|copd|damage|depriv|
+exhale|hypoxia|inhal|o2|oxygen|poison|restrict|suffocat|toxic"
+topic1_tweets <- my_tweets[grep(topic1_keywords, my_tweets$text, ignore.case=TRUE),]
+topic1_tweets$topic <- 1
+topic2_keywords = "bacteri|breed|contaminat|fung|germ|humid|moist|mold|mould|particle|
+pneumonia|respiratory|sinus|snot|spore|trap"
+topic2_tweets <- my_tweets[grep(topic2_keywords, my_tweets$text, ignore.case=TRUE),]
+topic2_tweets$topic <- 2
+topic3_keywords = "do not work|flaw|inadequate|ineffective|insufficient|pointless|
+useless|worthless|futile"
+topic3_tweets <- my_tweets[grep(topic3_keywords, my_tweets$text, ignore.case=TRUE),]
+topic3_tweets$topic <- 3
+topic4_keywords = "child abuse|communicat"
+topic4_tweets <- my_tweets[grep(topic4_keywords, my_tweets$text, ignore.case=TRUE),]
+topic4_tweets$topic <- 4
+topics_keyword <- dplyr::bind_rows(topic1_tweets, topic2_tweets, topic3_tweets, topic4_tweets)
+#Substitute tweet content with lemmatized content.
+topics_keyword <- merge(topics_keyword, my_tweets_processed[c("tweet_id", "text")], by="tweet_id")
+topics_keyword$text <- topics_keyword$text.y
+output_file <- paste(prefix, "_keyword_tweets.tsv", sep="")
+write.table(topics_keyword, output_file, quote=F, sep="\t", row.names=F)
+```
+### Set topic colors across graphs
+```{r}
+topic_colors <- RColorBrewer::brewer.pal(4, "Set2")
+```
+### Plot a line chart of each of the 4 topic popularity through time (as represented by no of tweets)
+```{r}
+plotTTimeLine2 <- function(my_k) {
+tweets_by_date <- topics_keyword %>% group_by(topic) %>% count(created)
+tweets_by_date2 = melt(tweets_by_date, id=c("created", "topic"))
+tweets_by_date2$topic <- as.factor(tweets_by_date2$topic)
+topic_timeline <- plotTopicTimeLine(tweets_by_date2, topic_colors, "tweet number")
+topic_timeline
+output_file <- paste(prefix, "_keywords", "_topic_timeline.pdf", sep="")
+ggsave(output_file, topic_timeline, dpi=300, height=4, width=5, units="in")
+output_file <- paste(prefix, "_keywords", "_topic_timeline.csv", sep="")
+write.table(tweets_by_date2, output_file, quote=F, sep=",", row.names=F)
+}
+
+plotTTimeLine2(4)
+
+```
+### Plot a line chart of each of the 4 topic popularity through time (as represented by no of re-tweets)
+```{r}
+plotTTimeLineRetweet2 <- function(my_k) {
+tweets_by_date <- topics_keyword %>% group_by(topic, created) %>% mutate(total_retweets = sum(retweet_count))
+tweets_by_date2 = melt(tweets_by_date[c("created", "topic", "total_retweets")], id=c("created", "topic"))
+tweets_by_date2$topic <- as.factor(tweets_by_date2$topic)
+topic_timeline <- plotTopicTimeLine(tweets_by_date2, topic_colors, "retweet number")
+topic_timeline
+output_file <- paste(prefix, "_keywords", "_topic_retweet_timeline.pdf", sep="")
+ggsave(output_file, topic_timeline, dpi=300, height=4, width=5, units="in")
+output_file <- paste(prefix, "_keywords", "_topic_retweet_timeline.csv", sep="")
+write.table(tweets_by_date2, output_file, quote=F, sep=",", row.names=F)
+}
+
+plotTTimeLineRetweet2(4)
+
+```
+### Plot a line chart of each of the 4 topic popularity through time (as represented by no of likes)
+```{r}
+
+plotTTimeLineLike2 <- function(my_k) {
+tweets_by_date <- topics_keyword %>% group_by(topic, created) %>% mutate(total_likes = sum(like_count))
+tweets_by_date2 = melt(tweets_by_date[c("created", "topic", "total_likes")], id=c("created", "topic"))
+tweets_by_date2$topic <- as.factor(tweets_by_date2$topic)
+topic_timeline <- plotTopicTimeLine(tweets_by_date2, topic_colors, "like number")
+topic_timeline
+output_file <- paste(prefix, "_keywords", "_topic_like_timeline.pdf", sep="")
+ggsave(output_file, topic_timeline, dpi=300, height=4, width=5, units="in")
+output_file <- paste(prefix, "_keywords", "_topic_like_timeline.csv", sep="")
+write.table(tweets_by_date2, output_file, quote=F, sep=",", row.names=F)
+}
+
+plotTTimeLineLike2(4)
+
+```
+
+### Function for plotting tf-idf
+```{r}
+plotTopicTfIdf2 <- function(my_k, l, w, out) {
+  topics_words <- topics_keyword %>%
+    dplyr::select(text, topic) %>% unique() %>%
+    tidytext::unnest_tokens(word, text, token="ngrams", n=l) %>%
+    dplyr::anti_join(stop_words) %>%  
+    count(word, topic, sort = TRUE) %>%
+    ungroup() %>% group_by(topic)
+  
+  tf_topic <- topics_words %>%
+    tidytext::bind_tf_idf(word, topic, n) 
+  topic_tfidf <- plotEmotionTopWords(tf_topic, topic_colors, "topic", 3, ceiling(my_k/3), "tf_idf", "tf-idf")
+  
+  output_file <- paste(prefix, "_keywords", "_", out, "_topic_tf_idf.pdf", sep="")
+  ggsave(output_file, topic_tfidf, dpi=300, height=4+(my_k*1.5), width=w, units="in")
+  output_file <- paste(prefix, "_keywords", "_", out, "_topic_tf_idf.csv", sep="")
+  write.table(tf_topic, output_file, quote=F, sep=",", row.names=F)
+  topic_tfidf
+}
+```
+### Plot a bar chart of unigrams which are most specific (highest tf-idf) to topic
+```{r}
+mapply(plotTopicTfIdf2, 4, 1, 12, "unigram")
+```
+### Plot a bar chart of bigrams which are most specific (highest tf-idf) to topic
+```{r}
+mapply(plotTopicTfIdf2, 4, 2, 17, "bigram")
+```
+### Plot a bar chart of trigrams which are most specific (highest tf-idf) to topic
+```{r}
+mapply(plotTopicTfIdf2, 4, 3, 21, "trigram")
+```
+### A table with basic summary stats per tweets belonging to one of the 4 topics
+```{r}
+addTopicStats2 <- function(my_k) {
+  topic_stats <- as_tibble(data.frame("topic" = integer(), 
+                                      "total_tweets" = integer(),
+                                      "total_users" = integer(),
+                                      "likes_mean_SD" = character(),
+                                      "retweets_mean_SD" = character(),
+                                      "quotes_mean_SD" = character(), 
+                                      "follower_count_mean_SD" = character()
+  ))
+  for (temp_k in seq(1, my_k)) {
+      df_subset = topics_keyword[topics_keyword$topic == temp_k,]
+      tweets_no = dim(df_subset)[1]
+      all_users <- length(unique(df_subset$author_id_hash))
+      all_likes <- sum(df_subset$like_count)
+      likes <- paste(round(all_likes/dim(df_subset)[1], digit=2), " (", round(sd(df_subset$like_count),digit=2) ,")", sep="")
+      all_retweets <- sum(df_subset$retweet_count)
+      retweets = paste(round(all_retweets/dim(df_subset)[1], digit=2), " (", round(sd(df_subset$retweet_count),digit=2) ,")", sep="")
+      all_quotes <- sum(df_subset$quote_count)
+      quotes = paste(round(all_quotes/dim(df_subset)[1], digit=2), " (", round(sd(df_subset$quote_count),digit=2) ,")", sep="")
+      all_followers <- sum(df_subset$author_followers_count)
+      followers = paste(round(all_followers/dim(df_subset)[1], digit=2), " (", round(sd(df_subset$author_followers_count),digit=2) ,")", sep="")
+      topic_stats <- topic_stats %>% dplyr::add_row(topic = temp_k, total_tweets = tweets_no,
+                                                  total_users = all_users,
+                                                  likes_mean_SD = likes,
+                                                  retweets_mean_SD = retweets,
+                                                  quotes_mean_SD = quotes,
+                                                  follower_count_mean_SD = followers)
+  } 
+  output_file <- paste(prefix, "_keywords", "_basic_stats.csv", sep="")
+  write.table(topic_stats, output_file, quote=F, sep=",", row.names=F)
+  topic_stats
+}
+
+addTopicStats2(4)
+```
+### Generate a keyword cloud for each topic
+```{r}
+generateKeyWordCloud2 <- function (my_k) {
+  #Plot a wordcloud for each topic
+  for (a in seq(1,my_k)) {
+    #Subset to topic
+    print(a)
+    topic_subset <- topics_keyword[topics_keyword$topic == a,]
+    topic_subset$text <- ifelse(stringr::str_detect(topic_subset$text, "\\w+"), strsplit(topic_subset$text, '\\s+'), topic_subset$text)
+    my_keywords <- unlist(topic_subset$text, recursive = TRUE)
+    wordcloud(my_keywords, min.freq=50, scale=c(3, .4), random.order=FALSE, rot.per=0.35, 
+            colors=brewer.pal(8, "Dark2"))
+    suffix = paste(a, "_keywords", sep="")
+    plotWordCloud(my_keywords, prefix, suffix)  
+  }
+}
+generateKeyWordCloud2(4)
+```
+## Topic modelling with LDA
+### Remove words that appear infrequently in tweets (<3) or too frequently (top 1%). Calculate DocumentTermMatrix for lemmatized dataset.
+```{r}
+tweets_id$tweet_id <- as.character(tweets_id$tweet_id)
+tweets_modelling <- tweets_id %>% group_by(word) %>% mutate(count=n()) %>% dplyr::filter(count > 2) %>% arrange(desc(count)) %>% ungroup()
+score_threshold <- tweets_modelling %>% select(word, count) %>% unique() %>% slice_tail(prop=0.99)
+tweets_modelling <- tweets_modelling[tweets_modelling$count <= score_threshold$count[1],]
+tweets_modelling <- tweets_modelling %>% dplyr::count(tweet_id, word, sort = TRUE) %>% dplyr::ungroup()
+  
+desc_dtm <- tweets_modelling %>% tidytext::cast_dtm(tweet_id, word, n)
+```
+### Topic modelling with LDA. Try a range of different ks.
+```{r}
+k <- c(50, 100, 150, 200)
+runLDA <- function(my_k) {
+desc_lda <- topicmodels::LDA(desc_dtm, k = my_k, control = list(seed = 1234))
+}
+tidyLDA <- function(my_k) {
+  k_pos <- match(my_k, k)
+  tidy_lda <- tidy(lda_runs[[k_pos]])
+}
+lda_runs <- lapply(k, runLDA)
+tidy_runs <- lapply(k, tidyLDA)
+```
+### Define a stable colour for each topic in each k-run. Easily distinguishable colours only for k < 24
+```{r}
+colors <- c(RColorBrewer::brewer.pal(8, "Set2"), RColorBrewer::brewer.pal(8, "Set1"), RColorBrewer::brewer.pal(7, "Accent"))
+color_template <- list()
+for (a in k) {
+  if (a < 24) {
+  color_sample <- sample(colors,size=a)
+  color_template <- append(color_template,list(color_sample))}
+  else {
+    color_sample <- colorRampPalette(colors)(a)
+    color_template <- append(color_template,list(color_sample))
+  }
+}
+``` 
+  
+### What is each topic about? Let’s examine the top 10 terms for each topic with highest beta.
+```{r}
+getTopTerms <- function(my_k) {
+  k_pos <- match(my_k, k)
+  top_terms <- tidy_runs[[k_pos]] %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10, with_ties = FALSE) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+}
+top_terms <- lapply(k, getTopTerms)
+```
+### Visualise top 10 terms for each topic
+```{r}
+vizTopics <- function(my_k) {
+  k_pos <- match(my_k, k)
+  topic_colors <- color_template[[k_pos]]
+  top10_topic_terms <- plotTopicTerms(top_terms[[k_pos]], topic_colors, my_k)
+  top10_topic_terms
+  output_file <- paste(prefix, "_k", my_k, "_top_topic_terms.pdf", sep="")
+  ggsave(output_file, top10_topic_terms, dpi=300, height=4+(my_k*0.5), width=10, units="in", limitsize = FALSE)
+}
+lapply(k, vizTopics)
+```
+## Investigate numbers of tweets with a given probability of assignment to each topic (gamma)
+```{r}
+vizGamma <- function (my_k) {
+  k_pos <- match(my_k, k)
+  lda_gamma <- tidy(lda_runs[[k_pos]], matrix = "gamma")
+  topic_colors <- color_template[[k_pos]]
+  topic_prob <- plotTopicProb(lda_gamma, topic_colors, my_k)
+  topic_prob
+  output_file <- paste(prefix, "_k", my_k, "_topic_prob.pdf", sep="")
+  ggsave(output_file, topic_prob, dpi=300, height=4+(my_k*0.5), width=10, units="in", limitsize = FALSE)
+}
+lapply(k, vizGamma)
+```
+
+### Prepare LDAvis visualisations to compare the frequency of top terms within topic to their overall frequency. 
+#### Note: this does not work for k=2
+```{r}
+prepareLDAvis <- function (my_k) {
+k_pos <- match(my_k, k)
+# phi (topic - token distribution matrix) -  tokens in rows, topic scores in columns:
+phi <- posterior(lda_runs[[k_pos]])$terms %>% as.matrix 
+
+# theta (document - topic distribution matrix) -  documents in rows, topic probs in columns:
+theta <- posterior(lda_runs[[k_pos]])$topics %>% as.matrix 
+
+# number of tokens per document
+doc_length <- tweets_modelling %>% group_by(tweet_id) %>% summarize(doc_length=n()) %>% select(doc_length) %>% pull() 
+
+# vocabulary: unique tokens
+vocab <- colnames(phi) 
+
+# overall token frequency
+term_frequency <- tweets_modelling %>% group_by(word) %>% summarise(n=n()) %>% arrange(match(word, vocab)) %>% select(n) %>% pull() 
+
+# create JSON containing all needed elements
+json <- createJSON(phi, theta, doc_length, vocab, term_frequency)
+}
+ldavis_json <- lapply(k, prepareLDAvis)
+```
+
+### Show LDAvis results in browser.
+```{r}
+lapply(ldavis_json, serVis)
+```
+### Assign the best topic to each tweet for each k run
+```{r}
+getBestTopicTweet <- function(my_k) {
+k_pos <- match(my_k, k)
+#First filter out low gammas (low probability of assignment to topic)
+#Then group by tweet id and Filter the df to retain best topic for each tweet.
+best_topic <- tidy(lda_runs[[k_pos]], matrix = "gamma") %>%
+  filter(gamma > 0.1) %>%
+  group_by(document) %>%
+  slice_max(gamma, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename("tweet_id" = "document")
+#Join with tweets dataframe (best_topic df has two columns: tweet_id and topic)
+all_combined <- merge(best_topic, my_tweets_processed, by="tweet_id")
+}
+tweet_topic_assig <- lapply(k, getBestTopicTweet)
+```
+
+### Plot a line chart of each topic popularity through time (as represented by no of tweets)
+```{r}
+plotTTimeLine <- function(my_k) {
+k_pos <- match(my_k, k)
+print(my_k)
+joined_topic <- tweet_topic_assig[[k_pos]]
+topic_colors <- color_template[[k_pos]]
+tweets_by_date <- joined_topic %>% group_by(topic) %>% count(created)
+tweets_by_date2 = melt(tweets_by_date, id=c("created", "topic"))
+tweets_by_date2$topic <- as.factor(tweets_by_date2$topic)
+topic_timeline <- plotTopicTimeLine(tweets_by_date2, topic_colors, "tweet number")
+topic_timeline
+output_file <- paste(prefix, "_k", my_k, "_topic_timeline.pdf", sep="")
+ggsave(output_file, topic_timeline, dpi=300, height=4, width=5, units="in")
+output_file <- paste(prefix, "_k", my_k, "_topic_timeline.csv", sep="")
+write.table(tweets_by_date2, output_file, quote=F, sep=",", row.names=F)
+}
+
+lapply(k, plotTTimeLine)
+
+
+```
+
+### Plot a line chart of each topic popularity through time (as represented by no of re-tweets)
+```{r}
+
+plotTTimeLineRetweet <- function(my_k) {
+k_pos <- match(my_k, k)
+print(my_k)
+joined_topic <- tweet_topic_assig[[k_pos]]
+topic_colors <- color_template[[k_pos]]
+tweets_by_date <- joined_topic %>% group_by(topic, created) %>% mutate(total_retweets = sum(retweet_count))
+tweets_by_date2 = melt(tweets_by_date[c("created", "topic", "total_retweets")], id=c("created", "topic"))
+tweets_by_date2$topic <- as.factor(tweets_by_date2$topic)
+topic_timeline <- plotTopicTimeLine(tweets_by_date2, topic_colors, "retweet number")
+topic_timeline
+output_file <- paste(prefix, "_k", my_k, "_topic_retweet_timeline.pdf", sep="")
+ggsave(output_file, topic_timeline, dpi=300, height=4, width=5, units="in")
+output_file <- paste(prefix, "_k", my_k, "_topic_retweet_timeline.csv", sep="")
+write.table(tweets_by_date2, output_file, quote=F, sep=",", row.names=F)
+}
+
+lapply(k, plotTTimeLineRetweet)
+
+```
+
+### Plot a line chart of each topic popularity through time (as represented by no of likes)
+```{r}
+
+plotTTimeLineLike <- function(my_k) {
+k_pos <- match(my_k, k)
+print(my_k)
+joined_topic <- tweet_topic_assig[[k_pos]]
+topic_colors <- color_template[[k_pos]]
+tweets_by_date <- joined_topic %>% group_by(topic, created) %>% mutate(total_likes = sum(like_count))
+tweets_by_date2 = melt(tweets_by_date[c("created", "topic", "total_likes")], id=c("created", "topic"))
+tweets_by_date2$topic <- as.factor(tweets_by_date2$topic)
+topic_timeline <- plotTopicTimeLine(tweets_by_date2, topic_colors, "like number")
+topic_timeline
+output_file <- paste(prefix, "_k", my_k, "_topic_like_timeline.pdf", sep="")
+ggsave(output_file, topic_timeline, dpi=300, height=4, width=5, units="in")
+output_file <- paste(prefix, "_k", my_k, "_topic_like_timeline.csv", sep="")
+write.table(tweets_by_date2, output_file, quote=F, sep=",", row.names=F)
+}
+
+lapply(k, plotTTimeLineLike)
+
+```
+### Function for plotting tf-idf
+```{r}
+plotTopicTfIdf <- function(my_k, l, w, out) {
+  k_pos <- match(my_k, k)
+  
+  joined_topic <- tweet_topic_assig[[k_pos]]
+  topic_colors <- color_template[[k_pos]]
+  
+  topics_words <- joined_topic %>%
+    dplyr::select(text, topic) %>% unique() %>%
+    tidytext::unnest_tokens(word, text, token="ngrams", n=l) %>%
+    dplyr::anti_join(stop_words) %>%  
+    count(word, topic, sort = TRUE) %>%
+    ungroup() %>% group_by(topic)
+  
+  tf_topic <- topics_words %>%
+    tidytext::bind_tf_idf(word, topic, n) 
+  topic_tfidf <- plotEmotionTopWords(tf_topic, topic_colors, "topic", 3, ceiling(my_k/3), "tf_idf", "tf-idf")
+  
+  output_file <- paste(prefix,  "_k", my_k, "_", out, "_topic_tf_idf.pdf", sep="")
+  ggsave(output_file, topic_tfidf, dpi=300, height=4+(my_k*1.5), width=w, units="in", limitsize = FALSE)
+  output_file <- paste(prefix,  "_k", my_k, "_", out, "_topic_tf_idf.csv", sep="")
+  write.table(tf_topic, output_file, quote=F, sep=",", row.names=F)
+  topic_tfidf
+}
+```
+
+### Plot a bar chart of unigrams which are most specific (highest tf-idf) to topic
+```{r}
+mapply(plotTopicTfIdf, k, 1, 12, "unigram")
+```
+### Plot a bar chart of bigrams which are most specific (highest tf-idf) to topic
+```{r}
+mapply(plotTopicTfIdf, k, 2, 17, "bigram")
+```
+### Plot a bar chart of trigrams which are most specific (highest tf-idf) to topic
+```{r}
+mapply(plotTopicTfIdf, k, 3, 21, "trigram")
+```
+### A table with basic summary stats per tweets belonging to a given topic
+```{r}
+addTopicStats <- function(my_k) {
+  topic_stats <- as_tibble(data.frame("topic" = integer(), 
+                                      "total_tweets" = integer(),
+                                      "total_users" = integer(),
+                                      "likes_mean_SD" = character(),
+                                      "retweets_mean_SD" = character(),
+                                      "quotes_mean_SD" = character(), 
+                                      "follower_count_mean_SD" = character()
+  ))
+  k_pos <- match(my_k, k)
+  joined_topic <- tweet_topic_assig[[k_pos]]
+  for (temp_k in seq(1, my_k)) {
+      df_subset = joined_topic[joined_topic$topic == temp_k,]
+      tweets_no = dim(df_subset)[1]
+      all_users <- length(unique(df_subset$author_id_hash))
+      all_likes <- sum(df_subset$like_count)
+      likes <- paste(round(all_likes/dim(df_subset)[1], digit=2), " (", round(sd(df_subset$like_count),digit=2) ,")", sep="")
+      all_retweets <- sum(df_subset$retweet_count)
+      retweets = paste(round(all_retweets/dim(df_subset)[1], digit=2), " (", round(sd(df_subset$retweet_count),digit=2) ,")", sep="")
+      all_quotes <- sum(df_subset$quote_count)
+      quotes = paste(round(all_quotes/dim(df_subset)[1], digit=2), " (", round(sd(df_subset$quote_count),digit=2) ,")", sep="")
+      all_followers <- sum(df_subset$author_followers_count)
+      followers = paste(round(all_followers/dim(df_subset)[1], digit=2), " (", round(sd(df_subset$author_followers_count),digit=2) ,")", sep="")
+      topic_stats <- topic_stats %>% dplyr::add_row(topic = temp_k, total_tweets = tweets_no,
+                                                  total_users = all_users,
+                                                  likes_mean_SD = likes,
+                                                  retweets_mean_SD = retweets,
+                                                  quotes_mean_SD = quotes,
+                                                  follower_count_mean_SD = followers)
+  } 
+  output_file <- paste(prefix, "_k", my_k, "_basic_stats.csv", sep="")
+  write.table(topic_stats, output_file, quote=F, sep=",", row.names=F)
+  topic_stats
+}
+
+tab_out <- lapply(k, addTopicStats)
+```
+
+### Generate a keyword cloud for each topic
+```{r}
+generateKeyWordCloud <- function (my_k) {
+k_pos <- match(my_k, k)
+joined_topic <- tweet_topic_assig[[k_pos]]
+  #Plot a wordcloud for each topic
+  for (a in seq(1,my_k)) {
+    #Subset to topic
+    print(a)
+    topic_subset <- joined_topic[joined_topic$topic == a,]
+    topic_subset$text <- ifelse(stringr::str_detect(topic_subset$text, "\\w+"), strsplit(topic_subset$text, '\\s+'), topic_subset$text)
+    my_keywords <- unlist(topic_subset$text, recursive = TRUE)
+    wordcloud(my_keywords, min.freq=50, scale=c(3, .4), random.order=FALSE, rot.per=0.35, 
+            colors=brewer.pal(8, "Dark2"))
+    suffix = paste(a, "_k", my_k, sep="")
+    plotWordCloud(my_keywords, prefix, suffix)  
+  }
+}
+keyword_clouds <- lapply(k, generateKeyWordCloud)
+```
